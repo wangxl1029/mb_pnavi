@@ -96,34 +96,6 @@ class CPosList:
 	def addpos(self, lon, lat):
 		self.lst += [(lat, lon)]
 
-def checkTrack(cur_tk):
-			gpscnt=len(cur_tk['gpsInfo'])
-			posList = CPosList()
-			if gpscnt >= jp.min_gpsnum:
-				available_cnt += 1
-				for gps in cur_tk['gpsInfo']:
-					if outOfChina(lon=gps['longitude'], lat=gps['latitude']):
-						illegal_cnt += 1
-					else:
-						posList.addpos(lon=gps['longitude'], lat=gps['latitude'])
-				#print(f'track#{track_cnt} all gps number is {len(posList.lst)}')
-				if [] != posList.lst and 0 == illegal_cnt:
-					cluster = DBSCAN(eps=0.5, min_samples=6,metric=haversine)
-					#cluster = DBSCAN(eps=0.5, min_samples=6)
-					#print(posList.lst)
-					d = np.array(posList.lst)
-					db = cluster.fit(d)
-					labels = db.labels_
-					labels_set = set(labels)
-					n_clusters_ = len(labels_set) - (1 if -1 in labels else 0)
-					if 1 != n_clusters_:
-						print(f'There are(is) {n_clusters_} cluster(s).')
-						print(labels_set)
-					else:
-						ct_ft.insert_one(cur_tk)
-				else:
-					print('postion list is empty!')
-			del posList
 
 class CEvalSession:
 	def __init__(self, host_addr, host_port, db_name):
@@ -148,8 +120,67 @@ class CEvalSession:
 			return self._dst.count({}) if None == userid else self._dst.count({'header.userid':userid})
 	def checkIntegrity(self):
 		pass
-	def doJob(self):
-		return False
+	def checkTrack(self, cur_tk, jp):
+		isTrackOK = False
+		gpsnum = len(cur_tk['gpsInfo'])
+		illegal_cnt = 0
+		if gpsnum > jp.min_gpsnum:
+			posList = CPosList()
+			for gps in cur_tk['gpsInfo']:
+				if outOfChina(lon=gps['longitude'], lat=gps['latitude']):
+					illegal_cnt += 1
+				else:
+					posList.addpos(lon=gps['longitude'], lat=gps['latitude'])
+			#print(f'track#{track_cnt} all gps number is {len(posList.lst)}')
+			isEmptyList = [] == posList.lst
+			if not isEmptyList and 0 == illegal_cnt:
+				cluster = DBSCAN(eps=0.5, min_samples=6,metric=haversine)
+				#print(posList.lst)
+				d = np.array(posList.lst)
+				db = cluster.fit(d)
+				labels = db.labels_
+				labels_set = set(labels)
+				n_clusters_ = len(labels_set) - (1 if -1 in labels else 0)
+				if 1 != n_clusters_:
+					print(f'There are(is) {n_clusters_} cluster(s).')
+					print(labels_set)
+				else:
+					self._dst.insert_one(cur_tk)
+					isTrackOK = True
+			elif isEmptyList:
+				print('postion list is empty!')
+			else:
+				print('bad gps#{illegal_cnt}/{gpsnum}')
+		return isTrackOK
+
+	def doJob(self, jp):
+		isKeyboardInterrupt = False
+		dbCurDevIdx = 0 if not 'dbCurDevIdx' in jp.dic else jp.dic['dbCurDevIdx']
+		track_num = 0 if not 'dbTrackNum' in jp.dic else jp.dic['dbTrackNum']
+		valid_track_num = 0 if not 'dbValidTrackNum' in jp.dic else jp.dic['dbValidTrackNum']
+		print(f'Process by device num is {dbCurDevIdx+1}/{len(jp.dbUserIdList)}.')
+		self._dst.drop()
+		try:
+			for dev_idx in range(dbCurDevIdx, len(jp.dbUserIdList)):
+				check_ok_num = 0
+				track_cnt = 0
+				for cur_tk in self._src.find({'header.userid':jp.dbUserIdList[dev_idx]}):
+					track_cnt+=1
+					if self.checkTrack(cur_tk,jp):
+						check_ok_num += 1
+				if 0 == track_cnt % jp.guard_num:
+					jp.syncTrackNums(track_num, valid_track_num, track_allnum)
+				jp.dic['dbCurDevIdx']	= dev_idx
+				jp.dic.sync()
+				track_num += track_cnt
+				valid_track_num += check_ok_num
+				print(f'dev{dev_idx}:user#{jp.dbUserIdList[dev_idx]} trackcnt#{check_ok_num}/{track_cnt}')
+		except KeyboardInterrupt:
+			isKeyboardInterrupt = True
+		jp.dic['dbCurDevIdx']	= dev_idx
+		jp.syncTrackNums(track_num, valid_track_num, track_allnum)
+		print(f'{track_num} track(s) done. {valid_track_num} is available.')
+		return isKeyboardInterrupt
 
 if __name__ == '__main__':
 	iniFile=GetIniFilePath()
@@ -170,7 +201,6 @@ if __name__ == '__main__':
 	print("track filtered name :{}".format(colle_name_trk_filtered))
 
 	sess = CEvalSession(host_addr, host_port, db_name)
-	#ct_ft.drop()
 	sess.initCollection(colle_name_trk, colle_name_trk_filtered)
 	jp = CJobPersistence()
 	jp.loadUserIds()
@@ -178,44 +208,15 @@ if __name__ == '__main__':
 		print("user IDs saved!")
 	else:
 		print("user IDs loaded!")
-	dbCurDevIdx = 0 if not 'dbCurDevIdx' in jp.dic else jp.dic['dbCurDevIdx']
-	print(f'Process by device num is {dbCurDevIdx+1}/{len(jp.dbUserIdList)}.')
 	track_allnum = sess.getDbTrackNum() if not 'dbAllTrackNum' in jp.dic else jp.dic['dbAllTrackNum']
-	track_num = 0 if not 'dbTrackNum' in jp.dic else jp.dic['dbTrackNum']
-	valid_track_num = 0 if not 'dbValidTrackNum' in jp.dic else jp.dic['dbValidTrackNum']
 
 	#check previous insertion
 	sess.checkIntegrity()
 	#filtered_num = sess.getDbTrackNum(jp.dbUserIdList[dbCurDevIdx])
 	#if filtered_num > 0:
 	#	pass
-	isKeyboardInterrupt = sess.doJob()
-	'''
-	try:
-		for dev_idx in range(dbCurDevIdx, len(jp.dbUserIdList)):
-			track_cnt = 0
-			available_cnt = 0
-			illegal_cnt = 0
-			#for cur_tk in ct.find({'header.userid':jp.dbUserIdList[dev_idx]}):
-			for cur_tk in ct.find({'header.userid':jp.dbUserIdList[dev_idx]}):
-				checkTrack(cur_tk)
-			if 0 == track_cnt % jp.guard_num:
-				#_syncGuard()
-				jp.syncTrackNums(track_num, valid_track_num, track_allnum)
-			track_cnt+=1
-			jp.dic['dbCurDevIdx']	= dev_idx
-			jp.dic.sync()
-			track_num += track_cnt
-			valid_track_num += available_cnt
-			print(f'dev{dev_idx}:user#{jp.dbUserIdList[dev_idx]} trackcnt#{available_cnt}/{track_cnt} bad gps#{illegal_cnt}')
-	except KeyboardInterrupt:
-		isKeyboardInterrupt = True
-	'''
+	isKeyboardInterrupt = sess.doJob(jp)
 	if isKeyboardInterrupt:
 		print('Key board interrupt!')
 	print(f'All track number is {track_allnum}.')
 	print(f'Guard number is {jp.guard_num}.')
-	
-	#jp.dic['dbCurDevIdx']	= dev_idx
-	jp.syncTrackNums(track_num, valid_track_num, track_allnum)
-	print(f'{track_num} track(s) done. {valid_track_num} is available.')
