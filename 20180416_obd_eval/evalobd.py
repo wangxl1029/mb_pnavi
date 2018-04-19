@@ -151,17 +151,22 @@ class CEvalSession:
 		self._client.close()
 	def initCollection(self, src_name, dst_name):
 		if None == self._src:
-			self._src = _db.get_collection(src_name)
+			self._src = self._db.get_collection(src_name)
 		if None == self._dst:
-			self._dst = _db.get_collection(dst_name)
+			self._dst = self._db.get_collection(dst_name)
 	def getUniqueSrcUserIdList(self):
-		return _src.distinct("header.userid")
+		return self._src.distinct("header.userid")
 
 	def getDbTrackNum(self, userid = None, srcflag = True):
 		if srcflag:
-			return _src.count({}) if None == userid else _src.count({'header.userid':userid})
+			return self._src.count({}) if None == userid else self._src.count({'header.userid':userid})
 		else:
-			return _dst.count({}) if None == userid else _dst.count({'header.userid':userid})
+			return self._dst.count({}) if None == userid else self._dst.count({'header.userid':userid})
+	def checkIntegrity(self):
+		pass
+	def doJob(self):
+		return False
+
 if __name__ == '__main__':
 	iniFile=GetIniFilePath()
 	if conf.read(iniFile) == []:
@@ -210,15 +215,20 @@ if __name__ == '__main__':
 	#	jp.dic.sync()
 
 	#check previous insertion
-	filtered_num = ct.count({'header.userid':jp.dbUserIdList[dbCurDevIdx]})
-	if filtered_num > 0:
-		pass
-	isKeyboardInterrupt = False
+	#filtered_num = ct.count({'header.userid':jp.dbUserIdList[dbCurDevIdx]})
+	sess.checkIntegrity()
+	#filtered_num = sess.getDbTrackNum(jp.dbUserIdList[dbCurDevIdx])
+	#if filtered_num > 0:
+	#	pass
+	#isKeyboardInterrupt = False
+	isKeyboardInterrupt = sess.doJob()
+	'''
 	try:
 		for dev_idx in range(dbCurDevIdx, len(jp.dbUserIdList)):
 			track_cnt = 0
 			available_cnt = 0
 			illegal_cnt = 0
+			#for cur_tk in ct.find({'header.userid':jp.dbUserIdList[dev_idx]}):
 			for cur_tk in ct.find({'header.userid':jp.dbUserIdList[dev_idx]}):
 				checkTrack(cur_tk)
 			if 0 == track_cnt % jp.guard_num:
@@ -232,13 +242,13 @@ if __name__ == '__main__':
 			print(f'dev{dev_idx}:user#{jp.dbUserIdList[dev_idx]} trackcnt#{available_cnt}/{track_cnt} bad gps#{illegal_cnt}')
 	except KeyboardInterrupt:
 		isKeyboardInterrupt = True
-
+	'''
 	if isKeyboardInterrupt:
 		print('Key board interrupt!')
 	print(f'All track number is {track_allnum}.')
 	print(f'Guard number is {jp.guard_num}.')
 	
-	jp.dic['dbCurDevIdx']	= dev_idx
+	#jp.dic['dbCurDevIdx']	= dev_idx
 	jp.syncTrackNums(track_num, valid_track_num, track_allnum)
 	#_syncGuard()
 	#mg_client.close()
