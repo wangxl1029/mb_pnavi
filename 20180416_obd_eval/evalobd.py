@@ -62,22 +62,6 @@ class CJobPersistence:
 		self.userIdPckPath = "userids.pkl"
 		self.mainPckPath = self.GetPickleFilePath()
 		self.dic = shelve.open(basname + '.shv')
-#		self.mainDict = {}
-		
-	'''
-	def __del__(self):
-		self.dic.close()
-
-	def loadMainly(self):
-		if {} == self.mainDict:
-			with open(mainPckPath, "rb") as f:
-				self.mainDict = pickle.load(f)
-
-	def saveMainly(self, dbCurTrkIdx):
-		self.mainDict = {'curTrkIdx' : dbCurTrkIdx}
-		with open() as f:
-			pickle.save(self.mainDict, f)
-	'''
 	def loadUserIds(self):
 		if [] == self.dbUserIdList and os.path.exists(self.userIdPckPath):
 			with open(self.userIdPckPath, 'rb') as f:
@@ -183,44 +167,28 @@ if __name__ == '__main__':
 	colle_name_trk = conf['mongo']['colle_tracks']
 	colle_name_trk_filtered = conf['mongo']['colle_tracks_filtered']
 	print("db name : {}, track name :{}".format(db_name, colle_name_trk))
-#	colle_name_trk_filtered = colle_name_trk + '_filtered'
 	print("track filtered name :{}".format(colle_name_trk_filtered))
 
-	#mg_client = pymongo.MongoClient(host_addr, int(host_port))
-	#db = mg_client.get_database(db_name)
 	sess = CEvalSession(host_addr, host_port, db_name)
-	#ct = db.get_collection(colle_name_trk)
-	#ct_ft = db.get_collection(colle_name_trk_filtered)
 	#ct_ft.drop()
 	sess.initCollection(colle_name_trk, colle_name_trk_filtered)
 	jp = CJobPersistence()
 	jp.loadUserIds()
 	if jp.updateUserIds(sess.getUniqueSrcUserIdList):
-	#if [] == jp.dbUserIdList:
-	#	jp.dbUserIdList = ct.distinct("header.userid")
-	#	jp.saveUserIds()
 		print("user IDs saved!")
 	else:
 		print("user IDs loaded!")
 	dbCurDevIdx = 0 if not 'dbCurDevIdx' in jp.dic else jp.dic['dbCurDevIdx']
 	print(f'Process by device num is {dbCurDevIdx+1}/{len(jp.dbUserIdList)}.')
-	#track_allnum = ct.count({}) if not 'dbAllTrackNum' in jp.dic else jp.dic['dbAllTrackNum']
 	track_allnum = sess.getDbTrackNum() if not 'dbAllTrackNum' in jp.dic else jp.dic['dbAllTrackNum']
 	track_num = 0 if not 'dbTrackNum' in jp.dic else jp.dic['dbTrackNum']
 	valid_track_num = 0 if not 'dbValidTrackNum' in jp.dic else jp.dic['dbValidTrackNum']
-	#def _syncGuard():
-	#	jp.dic['dbTrackNum']	= track_num
-	#	jp.dic['dbValidTrackNum']	= valid_track_num
-	#	jp.dic['dbAllTrackNum']	= track_allnum
-	#	jp.dic.sync()
 
 	#check previous insertion
-	#filtered_num = ct.count({'header.userid':jp.dbUserIdList[dbCurDevIdx]})
 	sess.checkIntegrity()
 	#filtered_num = sess.getDbTrackNum(jp.dbUserIdList[dbCurDevIdx])
 	#if filtered_num > 0:
 	#	pass
-	#isKeyboardInterrupt = False
 	isKeyboardInterrupt = sess.doJob()
 	'''
 	try:
@@ -250,6 +218,4 @@ if __name__ == '__main__':
 	
 	#jp.dic['dbCurDevIdx']	= dev_idx
 	jp.syncTrackNums(track_num, valid_track_num, track_allnum)
-	#_syncGuard()
-	#mg_client.close()
 	print(f'{track_num} track(s) done. {valid_track_num} is available.')
