@@ -88,9 +88,23 @@ class CJobPersistence:
 			with open(self.userIdPckPath, 'wb') as f:
 				pickle.dump(self.dbUserIdList, f)
 
+	def updateUserIds(self, IdListGenCallable):
+		isUpdated = False
+		if [] == jp.dbUserIdList:
+			self.dbUserIdList = IdListGenCallable()
+			self.saveUserIds()
+			isUpdated = True
+		return isUpdated
+
 	def GetPickleFilePath(self):
 		basname,ignore=GetFileNameAndExt(sys.argv[0])
 		return basname + ".pkl"
+
+	def syncTrackNums(self, track_num, valid_track_num, track_allnum):
+		self.dic['dbTrackNum']	= track_num
+		self.dic['dbValidTrackNum']	= valid_track_num
+		self.dic['dbAllTrackNum']	= track_allnum
+		self.dic.sync()
 
 class CPosList:
 	def __init__(self):
@@ -98,6 +112,56 @@ class CPosList:
 	def addpos(self, lon, lat):
 		self.lst += [(lat, lon)]
 
+def checkTrack(cur_tk):
+			gpscnt=len(cur_tk['gpsInfo'])
+			posList = CPosList()
+			if gpscnt >= jp.min_gpsnum:
+				available_cnt += 1
+				for gps in cur_tk['gpsInfo']:
+					if outOfChina(lon=gps['longitude'], lat=gps['latitude']):
+						illegal_cnt += 1
+					else:
+						posList.addpos(lon=gps['longitude'], lat=gps['latitude'])
+				#print(f'track#{track_cnt} all gps number is {len(posList.lst)}')
+				if [] != posList.lst and 0 == illegal_cnt:
+					cluster = DBSCAN(eps=0.5, min_samples=6,metric=haversine)
+					#cluster = DBSCAN(eps=0.5, min_samples=6)
+					#print(posList.lst)
+					d = np.array(posList.lst)
+					db = cluster.fit(d)
+					labels = db.labels_
+					labels_set = set(labels)
+					n_clusters_ = len(labels_set) - (1 if -1 in labels else 0)
+					if 1 != n_clusters_:
+						print(f'There are(is) {n_clusters_} cluster(s).')
+						print(labels_set)
+					else:
+						ct_ft.insert_one(cur_tk)
+				else:
+					print('postion list is empty!')
+			del posList
+
+class CEvalSession:
+	def __init__(self, host_addr, host_port, db_name):
+		self._client = pymongo.MongoClient(host_addr, int(host_port))
+		self._db = self._client.get_database(db_name)
+		self._src = None	# source collection
+		self._dst = None	# destination collection
+	def __del__(self):
+		self._client.close()
+	def initCollection(self, src_name, dst_name):
+		if None == self._src:
+			self._src = _db.get_collection(src_name)
+		if None == self._dst:
+			self._dst = _db.get_collection(dst_name)
+	def getUniqueSrcUserIdList(self):
+		return _src.distinct("header.userid")
+
+	def getDbTrackNum(self, userid = None, srcflag = True):
+		if srcflag:
+			return _src.count({}) if None == userid else _src.count({'header.userid':userid})
+		else:
+			return _dst.count({}) if None == userid else _dst.count({'header.userid':userid})
 if __name__ == '__main__':
 	iniFile=GetIniFilePath()
 	if conf.read(iniFile) == []:
@@ -112,34 +176,43 @@ if __name__ == '__main__':
 
 	db_name = conf['mongo']['database']
 	colle_name_trk = conf['mongo']['colle_tracks']
+	colle_name_trk_filtered = conf['mongo']['colle_tracks_filtered']
 	print("db name : {}, track name :{}".format(db_name, colle_name_trk))
-	colle_name_trk_filtered = colle_name_trk + '_filtered'
+#	colle_name_trk_filtered = colle_name_trk + '_filtered'
 	print("track filtered name :{}".format(colle_name_trk_filtered))
 
-	mg_client = pymongo.MongoClient(host_addr, int(host_port))
-	db = mg_client.get_database(db_name)
-	ct = db.get_collection(colle_name_trk)
-	ct_ft = db.get_collection(colle_name_trk_filtered)
-	ct_ft.drop()
+	#mg_client = pymongo.MongoClient(host_addr, int(host_port))
+	#db = mg_client.get_database(db_name)
+	sess = CEvalSession(host_addr, host_port, db_name)
+	#ct = db.get_collection(colle_name_trk)
+	#ct_ft = db.get_collection(colle_name_trk_filtered)
+	#ct_ft.drop()
+	sess.initCollection(colle_name_trk, colle_name_trk_filtered)
 	jp = CJobPersistence()
 	jp.loadUserIds()
-	if [] == jp.dbUserIdList:
-		jp.dbUserIdList = ct.distinct("header.userid")
-		jp.saveUserIds()
+	if jp.updateUserIds(sess.getUniqueSrcUserIdList):
+	#if [] == jp.dbUserIdList:
+	#	jp.dbUserIdList = ct.distinct("header.userid")
+	#	jp.saveUserIds()
 		print("user IDs saved!")
 	else:
 		print("user IDs loaded!")
 	dbCurDevIdx = 0 if not 'dbCurDevIdx' in jp.dic else jp.dic['dbCurDevIdx']
 	print(f'Process by device num is {dbCurDevIdx+1}/{len(jp.dbUserIdList)}.')
-	track_allnum = ct.count({}) if not 'dbAllTrackNum' in jp.dic else jp.dic['dbAllTrackNum']
+	#track_allnum = ct.count({}) if not 'dbAllTrackNum' in jp.dic else jp.dic['dbAllTrackNum']
+	track_allnum = sess.getDbTrackNum() if not 'dbAllTrackNum' in jp.dic else jp.dic['dbAllTrackNum']
 	track_num = 0 if not 'dbTrackNum' in jp.dic else jp.dic['dbTrackNum']
 	valid_track_num = 0 if not 'dbValidTrackNum' in jp.dic else jp.dic['dbValidTrackNum']
-	def _syncGuard():
-		jp.dic['dbTrackNum']	= track_num
-		jp.dic['dbValidTrackNum']	= valid_track_num
-		jp.dic['dbAllTrackNum']	= track_allnum
-		jp.dic.sync()
+	#def _syncGuard():
+	#	jp.dic['dbTrackNum']	= track_num
+	#	jp.dic['dbValidTrackNum']	= valid_track_num
+	#	jp.dic['dbAllTrackNum']	= track_allnum
+	#	jp.dic.sync()
 
+	#check previous insertion
+	filtered_num = ct.count({'header.userid':jp.dbUserIdList[dbCurDevIdx]})
+	if filtered_num > 0:
+		pass
 	isKeyboardInterrupt = False
 	try:
 		for dev_idx in range(dbCurDevIdx, len(jp.dbUserIdList)):
@@ -147,36 +220,11 @@ if __name__ == '__main__':
 			available_cnt = 0
 			illegal_cnt = 0
 			for cur_tk in ct.find({'header.userid':jp.dbUserIdList[dev_idx]}):
-				gpscnt=len(cur_tk['gpsInfo'])
-				posList = CPosList()
-				if gpscnt >= jp.min_gpsnum:
-					available_cnt += 1
-					for gps in cur_tk['gpsInfo']:
-						if outOfChina(lon=gps['longitude'], lat=gps['latitude']):
-							illegal_cnt += 1
-						else:
-							posList.addpos(lon=gps['longitude'], lat=gps['latitude'])
-					#print(f'track#{track_cnt} all gps number is {len(posList.lst)}')
-					if [] != posList.lst and 0 == illegal_cnt:
-						cluster = DBSCAN(eps=0.5, min_samples=6,metric=haversine)
-						#cluster = DBSCAN(eps=0.5, min_samples=6)
-						#print(posList.lst)
-						d = np.array(posList.lst)
-						db = cluster.fit(d)
-						labels = db.labels_
-						labels_set = set(labels)
-						n_clusters_ = len(labels_set) - (1 if -1 in labels else 0)
-						if 1 != n_clusters_:
-							print(f'There are(is) {n_clusters_} cluster(s).')
-							print(labels_set)
-						else:
-							ct_ft.insert_one(cur_tk)
-					else:
-						print('postion list is empty!')
-				if 0 == track_cnt % jp.guard_num:
-					_syncGuard()
-				track_cnt+=1
-				del posList
+				checkTrack(cur_tk)
+			if 0 == track_cnt % jp.guard_num:
+				#_syncGuard()
+				jp.syncTrackNums(track_num, valid_track_num, track_allnum)
+			track_cnt+=1
 			jp.dic['dbCurDevIdx']	= dev_idx
 			jp.dic.sync()
 			track_num += track_cnt
@@ -191,6 +239,7 @@ if __name__ == '__main__':
 	print(f'Guard number is {jp.guard_num}.')
 	
 	jp.dic['dbCurDevIdx']	= dev_idx
-	_syncGuard()
-	mg_client.close()
+	jp.syncTrackNums(track_num, valid_track_num, track_allnum)
+	#_syncGuard()
+	#mg_client.close()
 	print(f'{track_num} track(s) done. {valid_track_num} is available.')
