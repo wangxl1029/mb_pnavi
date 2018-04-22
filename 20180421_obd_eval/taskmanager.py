@@ -31,9 +31,12 @@ if __name__=='__main__':
         task.put(n)  
   
     print('Try get results..')  
-    for i in range(10):  
-        r = result.get(timeout=10)  
-        print('Result:%s' % r)  
+    for i in range(10): 
+        try:
+            r = result.get(timeout=10)  
+            print('Result:%s' % r)  
+        except queue.Empty:
+            print(f'task#{i} timeout')
   
     manager.shutdown()  
     print('master exit.')  

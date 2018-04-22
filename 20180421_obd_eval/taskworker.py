@@ -17,7 +17,12 @@ print('Connect to server %s...' % server_addr)
 # 端口和验证码注意保持与taskmanager.py设置的完全一致:
 m = QueueManager(address=(server_addr, 55555), authkey=b'abc')
 # 从网络连接:
-m.connect()
+try:
+	m.connect()
+except ConnectionRefusedError:
+	print('Try to connect target, but refused.')
+	exit(-1)
+
 # 获取Queue的对象:
 task = m.get_task_queue()
 result = m.get_result_queue()
@@ -29,7 +34,7 @@ for i in range(10):
         r = '%d * %d = %d' % (n, n, n*n)
         time.sleep(1)
         result.put(r)
-    except Queue.Empty:
+    except queue.Empty:
         print('task queue is empty.')
 # 处理结束:
 print('worker exit.')
